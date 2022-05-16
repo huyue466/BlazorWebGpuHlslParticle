@@ -1,0 +1,100 @@
+﻿@page "/"
+@using System.Threading
+@using Microsoft.JSInterop;
+@inject IJSRuntime jsRuntime;
+@implements IDisposable;
+@using System;
+@using System.IO;
+@using System.Numerics
+
+<button class="btn btn-primary" @onclick="particleDemo">Click me</button>
+
+@debug
+<div style="margin-top:5px">
+    <canvas width="400" height="400" id="webgpucanvas"></canvas>
+</div>
+
+@code {
+
+    CancellationTokenSource cts;
+    WebGpuInterop gpu;
+    string debug;
+
+    protected override void OnInitialized()
+    {
+
+        cts = new CancellationTokenSource();
+
+
+    }
+
+    void IDisposable.Dispose()
+    {
+        cts.Cancel();
+        cts.Dispose();
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            gpu = new WebGpuInterop(jsRuntime);
+            await Task.Delay(1);
+        }
+
+    }
+
+    async Task particleDemo()
+    {
+
+        var info = await gpu.CreateGpuDevice();
+        if (info.Contains("not supported"))
+        {
+            debug = "WebGPU is not supported. Enable chrome://flags/#enable-unsafe-webgpu flag.";
+            return;
+        }
+
+        else
+        {
+            debug = "WebGPU is supported";
+
+        }
+
+        await Task.Delay(1);
+        StateHasChanged();
+
+        var NUM_PARTICLES = 50000;
+        // read HLSL file and compile it into SPIRV Binary
+        var HlslFile = File.ReadAllText("Particle.hlsl");
+        var spirvCsHLSLBinary = Evergine.HLSLEverywhere.HLSLTranslator.HLSLToBinarySPIRV(HlslFile, Evergine.Common.Graphics.ShaderStages.Compute, Evergine.Common.Graphics.GraphicsProfile.Level_11_0, "csParticle");
+        var spirvVsHLSLBinary = Evergine.HLSLEverywhere.HLSLTranslator.HLSLToBinarySPIRV(HlslFile, Evergine.Common.Graphics.ShaderStages.Vertex, Evergine.Common.Graphics.GraphicsProfile.Level_11_0, "vsParticle");
+        var spirvPsHLSLBinary = Evergine.HLSLEverywhere.HLSLTranslator.HLSLToBinarySPIRV(HlslFile, Evergine.Common.Graphics.ShaderStages.Pixel, Evergine.Common.Graphics.GraphicsProfile.Level_11_0, "fsParticle");
+
+        var rand = new Random();
+        rand.NextDouble();
+        // initial compute buffer data with random data(position and veclocity)
+        Vector4[] computeBufferData = new Vector4[4];
+        computeBufferData[0] = new Vector4(Convert.ToSingle(rand.NextDouble() * 2.0 - 1.0), Convert.ToSingle(rand.NextDouble() * 2.0 - 1.0), 0.0f, 1.0f);
+        computeBufferData[1] = new Vector4(Convert.ToSingle(rand.NextDouble() * 2.0 - 1.0), Convert.ToSingle(rand.NextDouble() * 2.0 - 1.0), 0.0f, 1.0f);
+        computeBufferData[2] = new Vector4(Convert.ToSingle(rand.NextDouble() * 2.0 - 1.0), Convert.ToSingle(rand.NextDouble() * 2.0 - 1.0), 0.0f, 1.0f);
+        computeBufferData[3] = new Vector4(Convert.ToSingle(rand.NextDouble() / 30000.0), Convert.ToSingle(rand.NextDouble() / 30000.0), Convert.ToSingle(rand.NextDouble() / 30000.0), 0.0f);
+
+        // initial particle position data
+        Vector4[] positionBufferData = new Vector4[NUM_PARTICLES];
+        for (int i = 0; i < positionBufferData.Count(); i++)
+            positionBufferData[i] = new Vector4((float)(rand.NextDouble() * 2.0 - 1.0), (float)(rand.NextDouble() * 2.0 - 1.0), (float)(rand.NextDouble() * 2.0 - 1.0), 1.0f);
+
+        // initial particle velocity data
+        Vector2[] velocityBufferData = new Vector2[NUM_PARTICLES];
+        for (int i = 0; i < velocityBufferData.Count(); i++)
+            velocityBufferData[i] = new Vector2((float)(rand.NextDouble() * 0.002 - 0.001), (float)(rand.NextDouble() * 0.002 - 0.001));
+
+        // initial particle color data
+        Vector4[] colorBufferData = new Vector4[NUM_PARTICLES];
+        for (int i = 0; i < colorBufferData.Count(); i++)
+            colorBufferData[i] = new Vector4((float)(rand.Next(0, 256)), (float)(rand.Next(0, 256)), (float)(rand.Next(0, 256)), 128f);
+
+        await gpu.CreateComputeBufferParticle(computeBufferData, positionBufferData, velocityBufferData, colorBufferData, spirvCsHLSLBinary);
+        await gpu.CreateVsPsBufferParticle(spirvVsHLSLBinary, spirvPsHLSLBinary);
+        await gpu.PlotParticle();
+    }
+}
